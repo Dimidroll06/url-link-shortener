@@ -1,0 +1,95 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: url_shortener_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-shortener}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${DB_USER:-user} -d ${DB_NAME:-shortener}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: url_shortener_redis
+    restart: always
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+
+  migrate:
+    image: migrate/migrate
+    container_name: url_shortener_migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command:
+      [
+        "-path",
+        "/migrations",
+        "-database",
+        "postgres://${DB_USER:-user}:${DB_PASSWORD:-password}@db:5432/${DB_NAME:-shortener}?sslmode=disable",
+        "up",
+      ]
+    networks:
+      - app_network
+
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: url_shortener_app
+  #   restart: always
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     - DB_HOST=db
+  #     - DB_PORT=5432
+  #     - DB_USER=${DB_USER:-user}
+  #     - DB_PASSWORD=${DB_PASSWORD:-password}
+  #     - DB_NAME=${DB_NAME:-shortener}
+  #     - REDIS_HOST=redis
+  #     - REDIS_PORT=6379
+  #     - SERVER_PORT=8080
+  #     - GIN_MODE=release
+  #   ports:
+  #     - "8080:8080"
+  #   networks:
+  #     - app_network
+
+volumes:
+  pg_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  app_network:
+    driver: bridge
