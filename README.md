@@ -62,6 +62,37 @@
    docker-compose up
    ```
 
+## 📂 Структура папок
+
+```
+url-link-shortener/
+│
+├── cmd/
+│   └── server/
+│       └── main.go           # [ENTRY POINT]
+│
+├── cmd/                      # Документация и скриншоты
+│
+├── internal/
+│   ├── core/                 # [DOMAIN LAYER]
+│   │   ├── domain/           # Сущности
+│   │   ├── ports/            # Интерфейсы
+│   │   └── services/         # Реализация бизнес-правил
+│   │
+│   ├── adapters/             # [INFRASTRUCTURE LAYER]
+│   │   ├── handlers/         # HTTP Handlers
+│   │   ├── repository/       # Реализация доступа к PostgreSQL
+│   │   ├── cache/            # Реализация доступа к Redis
+│   │   └── server/           # Настройка HTTP сервера
+│   │
+│   ├── config/               # Чтение переменных окружения (.env)
+│   └── logger/               # Настройка логгера
+│
+├── migrations/               # SQL миграции
+├── docker-compose.yml
+└── Dockerfile
+```
+
 ## 📡 API Документация
 
 После запуска приложения Swagger документация доступна по адресу:

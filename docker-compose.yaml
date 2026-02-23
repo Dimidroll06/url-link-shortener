@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
       POSTGRES_DB: ${DB_NAME:-shortener}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +28,7 @@ services:
     restart: always
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -58,31 +58,52 @@ services:
     networks:
       - app_network
 
-  # app:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: url_shortener_app
-  #   restart: always
-  #   depends_on:
-  #     migrate:
-  #       condition: service_completed_successfully
-  #     redis:
-  #       condition: service_healthy
-  #   environment:
-  #     - DB_HOST=db
-  #     - DB_PORT=5432
-  #     - DB_USER=${DB_USER:-user}
-  #     - DB_PASSWORD=${DB_PASSWORD:-password}
-  #     - DB_NAME=${DB_NAME:-shortener}
-  #     - REDIS_HOST=redis
-  #     - REDIS_PORT=6379
-  #     - SERVER_PORT=8080
-  #     - GIN_MODE=release
-  #   ports:
-  #     - "8080:8080"
-  #   networks:
-  #     - app_network
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: url_shortener_app
+    restart: always
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 35s
+    stop_signal: SIGTERM
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:${SERVER_PORT:-8080}/health",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER:-user}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - DB_NAME=${DB_NAME:-shortener}
+
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      - SERVER_PORT=${SERVER_PORT:-8080}
+      - GIN_MODE=${GIN_MODE:-release}
+      - APP_ENV=${APP_ENV:-development}
+
+      - JWT_SECRET=${JWT_SECRET:-change_me_in_production}
+    ports:
+      - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
+    networks:
+      - app_network
 
 volumes:
   pg_data:
