@@ -85,8 +85,7 @@ url-link-shortener/
 │   │   ├── cache/            # Реализация доступа к Redis
 │   │   └── server/           # Настройка HTTP сервера
 │   │
-│   ├── config/               # Чтение переменных окружения (.env)
-│   └── logger/               # Настройка логгера
+│   └── config/               # Чтение переменных окружения (.env)
 │
 ├── migrations/               # SQL миграции
 ├── docker-compose.yml
@@ -101,9 +100,11 @@ url-link-shortener/
 
 ### Основные endpoints
 
-> To be continued
+| Эндпоинт  | Описание                                      |
+| --------- | --------------------------------------------- |
+| `/health` | Используется для healthcheck в docker compose |
 
-📥 **Insomnia коллекция:** [Скачать](./docs/insomnia_collection.json)
+📥 **Insomnia коллекция:** [Скачать](./docs/insomnia.yaml)
 
 ## 🧪 Тестирование
 
