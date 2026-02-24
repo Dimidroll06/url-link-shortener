@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine3.19 AS builder
+FROM golang:1.26-alpine3.23 AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 RUN adduser -D -g '' appuser
@@ -10,14 +10,10 @@ RUN go mod download
 
 COPY . .
 
-ENV CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64 \
-    GO111MODULE=on
-
+RUN go test ./... -v
 RUN go build -ldflags="-s -w -extldflags '-static'" -o bin/server ./cmd/server
 
-FROM alpine:3.19 AS production
+FROM alpine:3.23
 
 RUN apk --no-cache add ca-certificates tzdata
 
@@ -27,7 +23,6 @@ RUN addgroup -g 10001 -S appgroup && \
 WORKDIR /app
 
 COPY --from=builder --chown=appuser:appgroup /app/bin/server .
-COPY --from=builder --chown=appuser:appgroup /app/migrations ./migrations
 
 USER appuser
 
