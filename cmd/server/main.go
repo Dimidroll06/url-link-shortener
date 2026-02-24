@@ -1,8 +1,12 @@
 package main
 
 import (
+	"Dimidroll06/url-link-shortener/internal/adapters/cache"
+	"Dimidroll06/url-link-shortener/internal/adapters/handlers"
+	"Dimidroll06/url-link-shortener/internal/adapters/repository"
 	"Dimidroll06/url-link-shortener/internal/adapters/server"
 	"Dimidroll06/url-link-shortener/internal/config"
+	"Dimidroll06/url-link-shortener/internal/core/services"
 	"context"
 	"log"
 	"os"
@@ -40,7 +44,7 @@ func main() {
 		logger.Fatal("failed to init redis", zap.Error(err))
 	}
 
-	router := setupRouter(db, rdb)
+	router := setupRouter(db, rdb, logger, cfg)
 
 	srv := server.NewServer(
 		router,
@@ -87,11 +91,23 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 	return config.Build()
 }
 
-func setupRouter(db *pgxpool.Pool, rdb *redis.Client) *gin.Engine {
-	gin.SetMode(gin.ReleaseMode)
+func setupRouter(db *pgxpool.Pool, rdb *redis.Client, logger *zap.Logger, cfg *config.Config) *gin.Engine {
+	gin.SetMode(cfg.GinMode)
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(gin.Logger())
+
+	urlRepo := repository.NewURLRepository(db)
+	statsRepo := repository.NewStatsRepository(db)
+
+	urlCache := cache.NewURLCache(rdb, "urlshortener")
+	statsCache := cache.NewStatsCache(rdb, "urlshortener")
+
+	urlService := services.NewURLService(urlRepo, urlCache, statsCache, logger, cfg.URLExpirationDays)
+	statsService := services.NewStatsService(statsRepo, statsCache, urlRepo, logger)
+
+	urlHandler := handlers.NewURLHandler(urlService, statsService, logger, cfg.BaseURL)
 
 	r.GET("/health", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
@@ -109,6 +125,8 @@ func setupRouter(db *pgxpool.Pool, rdb *redis.Client) *gin.Engine {
 
 		c.JSON(200, gin.H{"status": "ok", "timestamp": time.Now()})
 	})
+
+	urlHandler.RegisterRoutes(r)
 
 	return r
 }
