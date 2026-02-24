@@ -2,6 +2,7 @@ package main
 
 import (
 	"Dimidroll06/url-link-shortener/internal/adapters/server"
+	"Dimidroll06/url-link-shortener/internal/config"
 	"context"
 	"log"
 	"os"
@@ -11,22 +12,28 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
 	rootContext, cancel := context.WithCancel(context.Background())
-	logger, err := zap.NewProduction()
+
+	cfg := config.Load()
+
+	logger, err := initLogger(cfg)
 	if err != nil {
 		log.Fatalf("failed to init logger %v", err.Error())
 	}
 
-	db, err := pgxpool.New(rootContext, "") // TODO: add connection string
+	db, err := pgxpool.New(rootContext, cfg.DatabaseURL())
 	if err != nil {
 		logger.Fatal("failed to init db", zap.Error(err))
 	}
 
 	rdb := redis.NewClient(&redis.Options{
-		// TODO: add redis options
+		Addr:     cfg.RedisURL(),
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
 	})
 
 	if err := rdb.Ping(rootContext).Err(); err != nil {
@@ -53,6 +60,31 @@ func main() {
 		logger.Fatal("server failed to start", zap.Error(err))
 		os.Exit(1)
 	}
+}
+
+func initLogger(cfg *config.Config) (*zap.Logger, error) {
+	var config zap.Config
+
+	if cfg.IsDevelopment() {
+		config = zap.NewDevelopmentConfig()
+		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	} else {
+		config = zap.NewProductionConfig()
+	}
+
+	levels := map[string]int{
+		"debug": -1,
+		"info":  0,
+		"warn":  1,
+		"error": 2,
+		"panic": 3,
+		"fatal": 5,
+	}
+
+	config.Level = zap.NewAtomicLevelAt(zapcore.Level(levels[cfg.LogLevel]))
+	config.Encoding = cfg.LogFormat
+
+	return config.Build()
 }
 
 func setupRouter(db *pgxpool.Pool, rdb *redis.Client) *gin.Engine {
