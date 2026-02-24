@@ -8,7 +8,6 @@ import (
 )
 
 type MockURLRepository struct {
-	// Ожидаемые результаты методов
 	CreateFunc            func(ctx context.Context, url *domain.URL) error
 	GetByShortCodeFunc    func(ctx context.Context, code string) (*domain.URL, error)
 	GetByIDFunc           func(ctx context.Context, id string) (*domain.URL, error)

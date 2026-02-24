@@ -2,11 +2,12 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"go.uber.org/zap"
 
 	"Dimidroll06/url-link-shortener/internal/core/domain"
+	servererrors "Dimidroll06/url-link-shortener/internal/core/errors"
 	"Dimidroll06/url-link-shortener/internal/core/ports"
 )
 
@@ -34,19 +35,34 @@ func NewStatsService(
 func (s *StatsService) GetDetailedStats(ctx context.Context, code string) (map[string]interface{}, error) {
 	url, err := s.urlRepo.GetByShortCode(ctx, code)
 	if err != nil {
+		s.logger.Error("get url for stats failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrURLNotFound) {
+			return nil, servererrors.ErrURLNotFound
+		}
 		return nil, err
 	}
 
+	// 2. Получаем счётчик из кэша
 	accessCount, err := s.statsCache.GetAccessCount(ctx, code)
 	if err != nil {
-		s.logger.Error("get access count", zap.Error(err))
-		return nil, fmt.Errorf("get access count: %w", err)
+		s.logger.Error("get access count failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		return nil, servererrors.ErrStatsUnavailable
 	}
 
+	// 3. Получаем последние переходы из БД
 	recentAccesses, err := s.statsRepo.GetRecentAccesses(ctx, code, 10)
 	if err != nil {
-		s.logger.Error("get recent accesses", zap.Error(err))
-		return nil, fmt.Errorf("get recent accesses: %w", err)
+		s.logger.Error("get recent accesses failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		return nil, err
 	}
 
 	return map[string]interface{}{
@@ -59,14 +75,24 @@ func (s *StatsService) GetDetailedStats(ctx context.Context, code string) (map[s
 func (s *StatsService) RecordAccess(ctx context.Context, code, ipAddress, userAgent, referer string) error {
 	url, err := s.urlRepo.GetByShortCode(ctx, code)
 	if err != nil {
+		s.logger.Error("get url for record access failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrURLNotFound) {
+			return servererrors.ErrURLNotFound
+		}
 		return err
 	}
 
 	stats := domain.NewURLStats(url.ID, ipAddress, userAgent, referer)
 
 	if err := s.statsRepo.RecordAccess(ctx, stats); err != nil {
-		s.logger.Error("record access in repository", zap.Error(err))
-		return fmt.Errorf("record access: %w", err)
+		s.logger.Error("record access in repository failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		return err
 	}
 
 	return nil

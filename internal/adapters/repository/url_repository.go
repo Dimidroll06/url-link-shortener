@@ -3,10 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"Dimidroll06/url-link-shortener/internal/core/domain"
+	servererrors "Dimidroll06/url-link-shortener/internal/core/errors"
 	"Dimidroll06/url-link-shortener/internal/core/ports"
 
 	"github.com/jackc/pgx/v5"
@@ -39,9 +39,9 @@ func (r *URLRepositoryImpl) Create(ctx context.Context, url *domain.URL) error {
 
 	if err != nil {
 		if isUniqueViolation(err, "urls_short_code_key") {
-			return domain.ErrShortCodeExists
+			return servererrors.ErrShortCodeExists
 		}
-		return fmt.Errorf("create url: %w", err)
+		return err
 	}
 
 	return nil
@@ -66,9 +66,9 @@ func (r *URLRepositoryImpl) GetByShortCode(ctx context.Context, code string) (*d
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrURLNotFound
+			return nil, servererrors.ErrURLNotFound
 		}
-		return nil, fmt.Errorf("get url by short code: %w", err)
+		return nil, err
 	}
 
 	return url, nil
@@ -93,9 +93,9 @@ func (r *URLRepositoryImpl) GetByID(ctx context.Context, id string) (*domain.URL
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrURLNotFound
+			return nil, servererrors.ErrURLNotFound
 		}
-		return nil, fmt.Errorf("get url by id: %w", err)
+		return nil, err
 	}
 
 	return url, nil
@@ -116,11 +116,11 @@ func (r *URLRepositoryImpl) Update(ctx context.Context, url *domain.URL) error {
 	)
 
 	if err != nil {
-		return fmt.Errorf("update url: %w", err)
+		return err
 	}
 
 	if result.RowsAffected() == 0 {
-		return domain.ErrURLNotFound
+		return servererrors.ErrURLNotFound
 	}
 
 	return nil
@@ -135,11 +135,11 @@ func (r *URLRepositoryImpl) Delete(ctx context.Context, code string) error {
 
 	result, err := r.db.Exec(ctx, query, code)
 	if err != nil {
-		return fmt.Errorf("delete url: %w", err)
+		return err
 	}
 
 	if result.RowsAffected() == 0 {
-		return domain.ErrURLNotFound
+		return servererrors.ErrURLNotFound
 	}
 
 	return nil
@@ -150,7 +150,7 @@ func (r *URLRepositoryImpl) ExistsByShortCode(ctx context.Context, code string) 
 	var exists bool
 	err := r.db.QueryRow(ctx, query, code).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("check short code exists: %w", err)
+		return false, err
 	}
 	return exists, nil
 }

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"Dimidroll06/url-link-shortener/internal/core/errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,10 +18,10 @@ type URL struct {
 
 func NewURL(originalURL, shortCode string, expirationDays int) (*URL, error) {
 	if originalURL == "" {
-		return nil, ErrInvalidURL
+		return nil, errors.ErrInvalidURL
 	}
 	if shortCode == "" {
-		return nil, ErrInvalidShortCode
+		return nil, errors.ErrInvalidShortCode
 	}
 
 	url := &URL{
@@ -48,16 +49,16 @@ func (u *URL) IsExpired() bool {
 
 func (u *URL) Validate() error {
 	if u.OriginalURL == "" {
-		return ErrInvalidURL
+		return errors.ErrInvalidURL
 	}
 	if u.ShortCode == "" {
-		return ErrInvalidShortCode
+		return errors.ErrInvalidShortCode
 	}
 	if u.IsExpired() {
-		return ErrURLExpired
+		return errors.ErrURLExpired
 	}
 	if !u.IsActive {
-		return ErrURLInactive
+		return errors.ErrURLInactive
 	}
 	return nil
 }

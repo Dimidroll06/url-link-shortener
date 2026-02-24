@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"Dimidroll06/url-link-shortener/internal/core/domain"
+	"Dimidroll06/url-link-shortener/internal/core/errors"
 	"Dimidroll06/url-link-shortener/internal/core/ports"
 
 	"github.com/redis/go-redis/v9"
@@ -30,7 +31,7 @@ func (c *URLCacheImpl) Get(ctx context.Context, code string) (*domain.URL, error
 	data, err := c.client.Get(ctx, key).Bytes()
 	if err != nil {
 		if err == redis.Nil {
-			return nil, domain.ErrURLNotFound
+			return nil, errors.ErrURLNotFound
 		}
 		return nil, fmt.Errorf("cache get: %w", err)
 	}

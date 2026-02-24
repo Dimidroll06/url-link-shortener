@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"Dimidroll06/url-link-shortener/internal/core/domain"
+	servererrors "Dimidroll06/url-link-shortener/internal/core/errors"
 	"Dimidroll06/url-link-shortener/internal/core/ports"
 )
 
@@ -49,18 +50,21 @@ func (s *URLService) Create(ctx context.Context, originalURL string) (*domain.UR
 	i := 0 // попытки
 	shortCode := s.generateShortCode(originalURL)
 	exists, err := s.repo.ExistsByShortCode(ctx, shortCode)
-	for exists && i <= 10 {
+	for (exists || err != nil) && i <= 10 {
+		if err != nil {
+			s.logger.Error("check short code exists failed",
+				zap.String("short_code", shortCode),
+				zap.Error(err),
+			)
+			return nil, servererrors.ErrCacheUnavailable
+		}
+
 		if i == 10 {
 			s.logger.Error("too many attempts to generate unique short code",
 				zap.String("original_url", originalURL),
 				zap.Int("attempts", i),
 			)
 			return nil, fmt.Errorf("too many attempts to generate unique short code")
-		}
-
-		if err != nil {
-			s.logger.Error("check short code exists", zap.Error(err))
-			return nil, fmt.Errorf("check uniqueness: %w", err)
 		}
 
 		shortCode = s.generateShortCode(fmt.Sprintf("%s-%d", originalURL, time.Now().UnixNano()))
@@ -70,12 +74,22 @@ func (s *URLService) Create(ctx context.Context, originalURL string) (*domain.UR
 
 	url, err := domain.NewURL(originalURL, shortCode, s.expirationDays)
 	if err != nil {
+		s.logger.Error("create domain url failed",
+			zap.String("original_url", originalURL),
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
 	if err := s.repo.Create(ctx, url); err != nil {
-		s.logger.Error("create url in repository", zap.Error(err))
-		return nil, fmt.Errorf("create url: %w", err)
+		s.logger.Error("create url in repository failed",
+			zap.String("short_code", url.ShortCode),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrShortCodeExists) {
+			return nil, servererrors.ErrShortCodeExists
+		}
+		return nil, servererrors.ErrCacheUnavailable
 	}
 
 	if err := s.cache.Set(ctx, url, s.cacheTTL); err != nil {
@@ -93,32 +107,53 @@ func (s *URLService) Create(ctx context.Context, originalURL string) (*domain.UR
 func (s *URLService) GetByShortCode(ctx context.Context, code string) (*domain.URL, error) {
 	url, err := s.cache.Get(ctx, code)
 	if err == nil {
+		s.logger.Debug("cache hit", zap.String("short_code", code))
+
 		if err := url.Validate(); err != nil {
 			s.cache.Delete(ctx, code)
+			s.logger.Warn("cached url invalid",
+				zap.String("short_code", code),
+				zap.Error(err),
+			)
 			return nil, err
 		}
 
 		go s.recordAccess(code)
-
 		return url, nil
 	}
 
-	if !errors.Is(err, domain.ErrURLNotFound) {
-		s.logger.Warn("cache get error", zap.Error(err))
+	if !errors.Is(err, servererrors.ErrURLNotFound) {
+		s.logger.Warn("cache get error",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
 	}
 
 	url, err = s.repo.GetByShortCode(ctx, code)
 	if err != nil {
-		s.logger.Error("get url from repository", zap.Error(err))
-		return nil, err
+		s.logger.Error("get url from repository failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrURLNotFound) {
+			return nil, servererrors.ErrURLNotFound
+		}
+		return nil, servererrors.ErrCacheUnavailable
 	}
 
 	if err := url.Validate(); err != nil {
+		s.logger.Warn("url validation failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
 	if err := s.cache.Set(ctx, url, s.cacheTTL); err != nil {
-		s.logger.Warn("cache set failed", zap.Error(err))
+		s.logger.Warn("cache set failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
 	}
 
 	go s.recordAccess(code)
@@ -131,20 +166,41 @@ func (s *URLService) GetByShortCode(ctx context.Context, code string) (*domain.U
 func (s *URLService) Delete(ctx context.Context, code string) error {
 	_, err := s.repo.GetByShortCode(ctx, code)
 	if err != nil {
-		return err
+		s.logger.Error("get url for delete failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrURLNotFound) {
+			return servererrors.ErrURLNotFound
+		}
+		return servererrors.ErrCacheUnavailable
 	}
 
 	if err := s.repo.Delete(ctx, code); err != nil {
-		s.logger.Error("delete url from repository", zap.Error(err))
-		return fmt.Errorf("delete url: %w", err)
+		s.logger.Error("delete url from repository failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrURLNotFound) {
+			return servererrors.ErrURLNotFound
+		}
+		return servererrors.ErrCacheUnavailable
 	}
 
 	if err := s.cache.Delete(ctx, code); err != nil {
-		s.logger.Warn("cache delete failed", zap.Error(err))
+		s.logger.Warn("cache delete failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
 	}
 
-	if err := s.statsCache.Reset(ctx, code); err != nil {
-		s.logger.Warn("stats cache reset failed", zap.Error(err))
+	if s.statsCache != nil {
+		if err := s.statsCache.Reset(ctx, code); err != nil {
+			s.logger.Warn("stats cache reset failed",
+				zap.String("short_code", code),
+				zap.Error(err),
+			)
+		}
 	}
 
 	s.logger.Info("url deleted", zap.String("short_code", code))
@@ -155,13 +211,28 @@ func (s *URLService) Delete(ctx context.Context, code string) error {
 func (s *URLService) GetStats(ctx context.Context, code string) (int64, error) {
 	_, err := s.repo.GetByShortCode(ctx, code)
 	if err != nil {
-		return 0, err
+		s.logger.Error("get url for stats failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		if errors.Is(err, servererrors.ErrURLNotFound) {
+			return 0, servererrors.ErrURLNotFound
+		}
+		return 0, servererrors.ErrCacheUnavailable
+	}
+
+	if s.statsCache == nil {
+		s.logger.Warn("stats cache not available")
+		return 0, servererrors.ErrStatsUnavailable
 	}
 
 	count, err := s.statsCache.GetAccessCount(ctx, code)
 	if err != nil {
-		s.logger.Error("get stats from cache", zap.Error(err))
-		return 0, fmt.Errorf("get stats: %w", err)
+		s.logger.Error("get stats from cache failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
+		return 0, servererrors.ErrStatsUnavailable
 	}
 
 	return count, nil
@@ -169,15 +240,15 @@ func (s *URLService) GetStats(ctx context.Context, code string) (int64, error) {
 
 func (s *URLService) validateURL(url string) error {
 	if url == "" {
-		return domain.ErrInvalidURL
+		return servererrors.ErrInvalidURL
 	}
 
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return fmt.Errorf("invalid url scheme: must start with http:// or https://")
+		return servererrors.ErrInvalidURLScheme
 	}
 
 	if len(url) > 2048 {
-		return fmt.Errorf("url too long: maximum 2048 characters")
+		return servererrors.ErrURLTooLong
 	}
 
 	return nil
@@ -203,7 +274,10 @@ func (s *URLService) recordAccess(code string) {
 
 	count, err := s.statsCache.IncrementAccess(ctx, code)
 	if err != nil {
-		s.logger.Error("increment access counter", zap.Error(err))
+		s.logger.Error("increment access counter failed",
+			zap.String("short_code", code),
+			zap.Error(err),
+		)
 		return
 	}
 
