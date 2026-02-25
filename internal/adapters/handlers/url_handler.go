@@ -8,19 +8,19 @@ import (
 	"go.uber.org/zap"
 
 	servererrors "Dimidroll06/url-link-shortener/internal/core/errors"
-	"Dimidroll06/url-link-shortener/internal/core/services"
+	"Dimidroll06/url-link-shortener/internal/core/ports"
 )
 
 type URLHandler struct {
-	urlService   *services.URLService
-	statsService *services.StatsService
+	urlService   ports.URLServiceInterface
+	statsService ports.StatsServiceInterface
 	logger       *zap.Logger
 	baseURL      string
 }
 
 func NewURLHandler(
-	urlSvc *services.URLService,
-	statsSvc *services.StatsService,
+	urlSvc ports.URLServiceInterface,
+	statsSvc ports.StatsServiceInterface,
 	logger *zap.Logger,
 	baseURL string,
 ) *URLHandler {
