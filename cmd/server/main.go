@@ -9,10 +9,13 @@ import (
 	"Dimidroll06/url-link-shortener/internal/core/services"
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -96,7 +99,9 @@ func setupRouter(db *pgxpool.Pool, rdb *redis.Client, logger *zap.Logger, cfg *c
 
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(gin.Logger())
+	r.Use(requestIDMiddleware())
+	r.Use(structuredLoggerMiddleware(logger))
+	r.Use(corsMiddleware(cfg.CORSOrigins))
 
 	urlRepo := repository.NewURLRepository(db)
 	statsRepo := repository.NewStatsRepository(db)
@@ -129,4 +134,78 @@ func setupRouter(db *pgxpool.Pool, rdb *redis.Client, logger *zap.Logger, cfg *c
 	urlHandler.RegisterRoutes(r)
 
 	return r
+}
+
+func requestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		requestID := c.GetHeader("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+
+		c.Set("request_id", requestID)
+		c.Writer.Header().Set("X-Request-ID", requestID)
+
+		c.Next()
+	}
+}
+
+func structuredLoggerMiddleware(logger *zap.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		method := c.Request.Method
+		requestID, _ := c.Get("request_id")
+
+		c.Next()
+
+		latency := time.Since(start)
+		status := c.Writer.Status()
+		errors := c.Errors.ByType(gin.ErrorTypePrivate).Errors()
+
+		fields := []zapcore.Field{
+			zap.String("method", method),
+			zap.String("path", path),
+			zap.Int("status", status),
+			zap.Duration("latency", latency),
+			zap.String("request_id", requestID.(string)),
+			zap.String("client_ip", c.ClientIP()),
+			zap.String("user_agent", c.Request.UserAgent()),
+		}
+
+		if len(errors) > 0 {
+			fields = append(fields, zap.Strings("handler_errors", errors))
+		}
+
+		switch {
+		case status >= http.StatusInternalServerError:
+			logger.Error("server error", fields...)
+		case status >= http.StatusBadRequest:
+			logger.Warn("client error", fields...)
+		default:
+			logger.Info("request completed", fields...)
+		}
+	}
+}
+
+func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
+	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+		return cors.New(cors.Config{
+			AllowAllOrigins:  true,
+			AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+			ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
+			AllowCredentials: true,
+			MaxAge:           12 * time.Hour,
+		})
+	}
+
+	return cors.New(cors.Config{
+		AllowOrigins:     allowedOrigins,
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	})
 }

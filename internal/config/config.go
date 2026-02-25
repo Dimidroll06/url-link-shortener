@@ -6,10 +6,11 @@ import (
 )
 
 type Config struct {
-	ServerPort string `env:"SERVER_PORT" envDefault:"8080"`
-	GinMode    string `env:"GIN_MODE" envDefault:"release"`
-	AppEnv     string `env:"APP_ENV" envDefault:"development"`
-	BaseURL    string `env:"BASE_URL" envDefault:"http://localhost:8080"`
+	ServerPort  string   `env:"SERVER_PORT" envDefault:"8080"`
+	GinMode     string   `env:"GIN_MODE" envDefault:"release"`
+	AppEnv      string   `env:"APP_ENV" envDefault:"development"`
+	BaseURL     string   `env:"BASE_URL" envDefault:"http://localhost:8080"`
+	CORSOrigins []string `env:"CORS_ORIGINS" envDefault:"*"`
 
 	DBHost     string `env:"DB_HOST" envDefault:"localhost"`
 	DBPort     string `env:"DB_PORT" envDefault:"5432"`
