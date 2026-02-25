@@ -43,6 +43,12 @@ Container: Docker + Docker Compose
 Architecture: Clean Architecture + Dependency Injection
 ```
 
+## 📸 Скриншоты
+
+### Архитектура базы данных
+
+![Схема базы данных](./docs/screenshots/shortener_db_schema.png)
+
 ## 🚀 Быстрый старт
 
 ### Требования
