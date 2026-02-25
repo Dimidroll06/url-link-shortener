@@ -1,0 +1,419 @@
+openapi: 3.0.3
+info:
+  title: URL Link Shortener API
+  description: |
+    Высоконагруженный REST API сервис для сокращения URL ссылок с кэшированием в Redis.
+
+    ## Основные возможности
+    - Создание коротких ссылок с валидацией
+    - Мгновенный редирект через кэш
+    - Статистика переходов
+    - Graceful shutdown и health checks
+    - Structured logging с request_id
+
+    ## Ошибки
+    Все ошибки возвращаются в формате:
+    ```json
+    {
+      "error": "описание ошибки"
+    }
+    ```
+  version: 1.0.0
+  contact:
+    name: GitHub Repository
+    url: https://github.com/Dimidroll06/url-link-shortener
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Development server
+  - url: https://api.example.com
+    description: Production server
+
+tags:
+  - name: Health
+    description: Проверка работоспособности сервиса
+  - name: URLs
+    description: Операции с короткими ссылками
+  - name: Statistics
+    description: Статистика переходов
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: |
+        Проверяет подключение к PostgreSQL и Redis.
+
+        Используется для:
+        - Docker health checks
+        - Мониторинга доступности сервиса
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Сервис работает корректно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                timestamp: "2024-01-15T10:30:00Z"
+        "503":
+          description: Сервис недоступен (БД или Redis не отвечают)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthErrorResponse"
+              examples:
+                database:
+                  summary: PostgreSQL недоступен
+                  value:
+                    status: unhealthy
+                    error: database
+                redis:
+                  summary: Redis недоступен
+                  value:
+                    status: unhealthy
+                    error: redis
+
+  /api/v1/shorten:
+    post:
+      tags:
+        - URLs
+      summary: Create short URL
+      description: |
+        Создаёт короткую ссылку из оригинального URL.
+
+        Процесс:
+        1. Валидация URL (схема http/https, длина ≤ 2048)
+        2. Генерация уникального короткого кода (8 символов)
+        3. Сохранение в PostgreSQL
+        4. Кэширование в Redis (TTL: 1 час)
+
+        Срок жизни ссылки задаётся в переменной окружения `URL_EXPIRATION_DAYS` (по умолчанию 30 дней).
+      operationId: createShortUrl
+      requestBody:
+        description: Оригинальный URL для сокращения
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRequest"
+            examples:
+              example1:
+                summary: Обычный URL
+                value:
+                  url: "https://example.com/very/long/path?param=value"
+              example2:
+                summary: URL с параметрами
+                value:
+                  url: "https://google.com/search?q=golang&oq=openapi"
+      responses:
+        "201":
+          description: Ссылка успешно создана
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+              description: Уникальный идентификатор запроса для трассировки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateResponse"
+              example:
+                short_code: abc12345
+                original_url: "https://example.com/very/long/path?param=value"
+                short_url: "http://localhost:8080/abc12345"
+        "400":
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_json:
+                  summary: Неверный JSON
+                  value:
+                    error: "invalid request body"
+                empty_url:
+                  summary: Пустой URL
+                  value:
+                    error: "invalid URL"
+                invalid_scheme:
+                  summary: Неверная схема (не http/https)
+                  value:
+                    error: "invalid URL scheme: must start with http:// or https://"
+                too_long:
+                  summary: URL слишком длинный
+                  value:
+                    error: "url too long: maximum 2048 characters"
+        "409":
+          description: Сгенерированный код уже существует (крайне редко)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "short code already exists"
+        "500":
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "internal server error"
+
+  "/{code}":
+    get:
+      tags:
+        - URLs
+      summary: Redirect to original URL
+      description: |
+        Перенаправляет на оригинальный URL по короткому коду.
+
+        Процесс:
+        1. Проверка кэша Redis (мгновенный ответ)
+        2. При cache miss — запрос к PostgreSQL
+        3. Асинхронное увеличение счётчика переходов
+        4. Редирект с кодом 302 (временный)
+
+        **Важно**: Используется код 302 (а не 301), чтобы:
+        - Браузеры не кэшировали редирект
+        - Собиралась статистика каждого перехода
+        - Можно было деактивировать ссылку
+
+        Ссылка считается невалидной, если:
+        - Не найдена в БД
+        - Истёк срок действия (`expires_at < now`)
+        - Деактивирована (`is_active = false`)
+      operationId: redirectToOriginalUrl
+      parameters:
+        - name: code
+          in: path
+          description: Короткий код ссылки (8 символов)
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 10
+          examples:
+            example1:
+              summary: Обычный код
+              value: abc12345
+      responses:
+        "302":
+          description: Успешный редирект
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: Оригинальный URL для редиректа
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+              description: Уникальный идентификатор запроса
+          content: {}
+        "404":
+          description: Ссылка не найдена, истекла или деактивирована
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "link not found"
+        "500":
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "internal server error"
+
+  "/api/v1/{code}/stats":
+    get:
+      tags:
+        - Statistics
+      summary: Get URL statistics
+      description: |
+        Возвращает статистику переходов и метаданные ссылки.
+
+        Данные включают:
+        - Короткий код и оригинальный URL
+        - Общее количество переходов (из Redis)
+        - Дату создания
+        - Дату истечения (если установлена)
+
+        **Примечание**: Счётчик переходов обновляется асинхронно и может иметь задержку до 1 секунды.
+      operationId: getUrlStatistics
+      parameters:
+        - name: code
+          in: path
+          description: Короткий код ссылки
+          required: true
+          schema:
+            type: string
+          examples:
+            example1:
+              summary: Пример кода
+              value: abc12345
+      responses:
+        "200":
+          description: Успешный ответ со статистикой
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+              example:
+                short_code: abc12345
+                original_url: "https://example.com/very/long/path"
+                total_accesses: 42
+                created_at: "2024-01-15T10:30:00Z"
+                expires_at: "2024-02-15T10:30:00Z"
+        "404":
+          description: Ссылка не найдена или невалидна
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "link not found"
+        "500":
+          description: Ошибка при получении статистики
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "failed to get statistics"
+
+components:
+  schemas:
+    CreateRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Оригинальный URL для сокращения
+          minLength: 1
+          maxLength: 2048
+          example: "https://example.com/very/long/path?param=value"
+
+    CreateResponse:
+      type: object
+      properties:
+        short_code:
+          type: string
+          description: Сгенерированный короткий код (8 символов)
+          example: abc12345
+        original_url:
+          type: string
+          format: uri
+          description: Оригинальный URL
+          example: "https://example.com/very/long/path"
+        short_url:
+          type: string
+          format: uri
+          description: Полная короткая ссылка
+          example: "http://localhost:8080/abc12345"
+
+    StatsResponse:
+      type: object
+      properties:
+        short_code:
+          type: string
+          description: Короткий код
+          example: abc12345
+        original_url:
+          type: string
+          format: uri
+          description: Оригинальный URL
+          example: "https://example.com/very/long/path"
+        total_accesses:
+          type: integer
+          format: int64
+          description: Общее количество переходов
+          example: 42
+        created_at:
+          type: string
+          format: date-time
+          description: Дата создания ссылки (RFC3339)
+          example: "2024-01-15T10:30:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: Дата истечения срока действия (RFC3339), если установлена
+          example: "2024-02-15T10:30:00Z"
+          nullable: true
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: Статус сервиса
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          description: Время проверки
+          example: "2024-01-15T10:30:00Z"
+
+    HealthErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [unhealthy]
+          description: Статус сервиса
+          example: unhealthy
+        error:
+          type: string
+          enum: [database, redis]
+          description: Компонент, который не отвечает
+          example: database
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Описание ошибки
+          example: "invalid URL"
+
+  parameters:
+    ShortCode:
+      name: code
+      in: path
+      description: Короткий код ссылки
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 10
+  responses:
+    UnauthorizedError:
+      description: Аутентификация требуется (будущая функциональность)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+externalDocs:
+  description: Исходный код на GitHub
+  url: https://github.com/Dimidroll06/url-link-shortener
