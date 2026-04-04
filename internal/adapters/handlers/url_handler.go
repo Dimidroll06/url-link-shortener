@@ -77,7 +77,6 @@ func (h *URLHandler) Redirect(c *gin.Context) {
 
 	url, err := h.urlService.GetByShortCode(c.Request.Context(), code)
 	if err != nil {
-		// 🔥 Ключевой момент: 404 для всех "невалидных" состояний
 		if errors.Is(err, servererrors.ErrURLNotFound) ||
 			errors.Is(err, servererrors.ErrURLExpired) ||
 			errors.Is(err, servererrors.ErrURLInactive) {
